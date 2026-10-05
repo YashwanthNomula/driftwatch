@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "driftwatch"
+version = "1.0.0"
+description = "Data drift detection: PSI + KS per feature, with terminal, JSON, and HTML reports"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Yashwanth Nomula" }]
+
+[project.scripts]
+driftwatch = "driftwatch.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["driftwatch*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
