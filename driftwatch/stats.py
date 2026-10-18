@@ -9,6 +9,10 @@ import math
 PSI_NO_CHANGE = 0.1
 PSI_MODERATE = 0.25
 
+#: Standard KS interpretation thresholds: < 0.1 small, 0.1-0.3 moderate, > 0.3 large.
+KS_NO_CHANGE = 0.1
+KS_MODERATE = 0.3
+
 #: Smoothing applied to zero-probability bins so PSI stays finite.
 EPSILON = 1e-4
 
@@ -135,10 +139,36 @@ def ks_2samp(a: list[float], b: list[float]) -> float:
     return best
 
 
-def psi_verdict(psi_value: float) -> str:
-    """Human verdict for a PSI value using standard thresholds."""
-    if psi_value < PSI_NO_CHANGE:
+def psi_verdict(psi_value: float,
+                warning: float = PSI_NO_CHANGE,
+                drift: float = PSI_MODERATE) -> str:
+    """Human verdict for a PSI value using the given warning/drift cutoffs."""
+    if psi_value < warning:
         return "no significant change"
-    if psi_value <= PSI_MODERATE:
+    if psi_value <= drift:
         return "moderate shift — watch"
     return "significant drift"
+
+
+def ks_verdict(ks_value: float,
+               warning: float = KS_NO_CHANGE,
+               drift: float = KS_MODERATE) -> str:
+    """Human verdict for a KS statistic using the given warning/drift cutoffs."""
+    if ks_value < warning:
+        return "no significant change"
+    if ks_value <= drift:
+        return "moderate shift — watch"
+    return "significant drift"
+
+
+#: Severity ranking of verdicts, used to combine PSI and KS opinions.
+_VERDICT_SEVERITY = {
+    "no significant change": 0,
+    "moderate shift — watch": 1,
+    "significant drift": 2,
+}
+
+
+def worst_verdict(*verdicts: str) -> str:
+    """Return the most severe verdict (e.g. the worse of PSI and KS opinions)."""
+    return max(verdicts, key=lambda v: _VERDICT_SEVERITY[v])

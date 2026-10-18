@@ -1,0 +1,17 @@
+{
+  "defaults": {
+    "ks_drift": 0.3,
+    "ks_warning": 0.1,
+    "psi_drift": 0.25,
+    "psi_warning": 0.1
+  },
+  "features": {
+    "age": {
+      "psi_drift": 0.15,
+      "psi_warning": 0.05
+    },
+    "income": {
+      "ks_drift": 0.4
+    }
+  }
+}

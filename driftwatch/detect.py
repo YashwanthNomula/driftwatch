@@ -6,6 +6,7 @@ import csv
 from dataclasses import dataclass, field
 
 from . import stats
+from .config import ThresholdConfig, ThresholdSet, load_config
 
 
 @dataclass
@@ -68,17 +69,22 @@ def _split_missing(values: list[str]) -> tuple[list[str], int]:
     return present, len(values) - len(present)
 
 
-def compare_feature(name: str, ref_vals: list[str], cur_vals: list[str]) -> FeatureResult:
+def compare_feature(name: str, ref_vals: list[str], cur_vals: list[str],
+                    thresholds: ThresholdSet | None = None) -> FeatureResult:
     ref_present, ref_missing = _split_missing(ref_vals)
     cur_present, cur_missing = _split_missing(cur_vals)
     kind = infer_kind(ref_present + cur_present)
+    th = thresholds or ThresholdSet()
 
     if kind == "numeric":
         ref_nums = [float(v) for v in ref_present]
         cur_nums = [float(v) for v in cur_present]
         psi_value, edges, ref_counts, cur_counts = stats.psi_numeric(ref_nums, cur_nums)
         ks_value = stats.ks_2samp(ref_nums, cur_nums)
-        verdict = stats.psi_verdict(psi_value)
+        verdict = stats.worst_verdict(
+            stats.psi_verdict(psi_value, th.psi_warning, th.psi_drift),
+            stats.ks_verdict(ks_value, th.ks_warning, th.ks_drift),
+        )
         detail = {
             "bin_edges": edges,
             "ref_counts": ref_counts,
@@ -89,7 +95,7 @@ def compare_feature(name: str, ref_vals: list[str], cur_vals: list[str]) -> Feat
     else:
         psi_value, cats, ref_counts, cur_counts = stats.psi_categorical(ref_present, cur_present)
         ks_value = None
-        verdict = stats.psi_verdict(psi_value)
+        verdict = stats.psi_verdict(psi_value, th.psi_warning, th.psi_drift)
         detail = {
             "categories": cats,
             "ref_counts": ref_counts,
@@ -106,8 +112,18 @@ def compare_feature(name: str, ref_vals: list[str], cur_vals: list[str]) -> Feat
 
 
 def compare_datasets(ref_path: str, cur_path: str,
-                      exclude: tuple[str, ...] = ()) -> DriftReport:
-    """Compare two CSVs column-by-column; returns a full drift report."""
+                      exclude: tuple[str, ...] = (),
+                      config: ThresholdConfig | str | None = None) -> DriftReport:
+    """Compare two CSVs column-by-column; returns a full drift report.
+
+    ``config`` is an optional :class:`ThresholdConfig` (or a path to a JSON
+    config file) with per-feature PSI/KS warning/drift cutoffs; features not
+    listed fall back to the defaults.
+    """
+    if isinstance(config, str):
+        config = load_config(config)
+    cfg = config or ThresholdConfig()
+
     ref_cols, ref_rows = read_csv(ref_path)
     cur_cols, cur_rows = read_csv(cur_path)
 
@@ -120,7 +136,8 @@ def compare_datasets(ref_path: str, cur_path: str,
     for col in common:
         ref_vals = [r.get(col, "") or "" for r in ref_rows]
         cur_vals = [r.get(col, "") or "" for r in cur_rows]
-        features.append(compare_feature(col, ref_vals, cur_vals))
+        features.append(compare_feature(col, ref_vals, cur_vals,
+                                        thresholds=cfg.thresholds_for(col)))
 
     return DriftReport(features=features, n_ref_rows=len(ref_rows),
                        n_cur_rows=len(cur_rows), dropped=dropped, added=added)

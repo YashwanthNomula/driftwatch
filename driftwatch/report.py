@@ -6,6 +6,7 @@ import html
 import json
 
 from .detect import DriftReport, FeatureResult
+from .trend import TrendReport, sparkline, HTML_PSI_SCALE
 
 
 def _fmt(value: float | None) -> str:
@@ -52,6 +53,148 @@ def to_dict(report: DriftReport) -> dict:
 
 def render_json(report: DriftReport) -> str:
     return json.dumps(to_dict(report), indent=2, default=str)
+
+
+# ---------------------------------------------------------------------------
+# Trend reports
+# ---------------------------------------------------------------------------
+
+_DIRECTION_ARROW = {"rising": "↑", "falling": "↓", "flat": "→", "n/a": "·"}
+
+
+def render_trend_terminal(report: TrendReport, alerts: list | None = None) -> str:
+    lines = [
+        f"driftwatch trend: {report.n_ref_rows} reference rows vs "
+        f"{len(report.labels)} snapshots",
+        f"features tracked: {len(report.features)} | "
+        f"significant drift (latest): {report.n_drifted_latest} | "
+        f"watch (latest): {report.n_watch_latest}",
+        "",
+    ]
+    label_cells = "".join(f"{lab:>8}" for lab in report.labels)
+    lines.append(f"{'feature':<22}{'type':<12}{label_cells}  trend     verdict")
+    lines.append("-" * (36 + 8 * len(report.labels) + 22))
+    for f in report.features:
+        psi_cells = "".join(f"{_fmt(p.psi):>8}" for p in f.points)
+        dirn = f.direction
+        arrow = _DIRECTION_ARROW[dirn]
+        trend = f"{sparkline(f.psi_series)}{arrow} {dirn}"
+        lines.append(f"{f.name:<22}{f.kind:<12}{psi_cells}  {trend:<12}"
+                     f"{f.latest_verdict}")
+    lines.append("")
+    lines.append(f"latest snapshot ({report.labels[-1]}): "
+                 f"{report.snapshot_rows[-1]} rows")
+    if alerts:
+        lines.append("")
+        lines.append(f"alerts: {len(alerts)} new")
+        for alert in alerts:
+            lines.append(f"  ! {alert.summary()}")
+    return "\n".join(lines)
+
+
+def trend_to_dict(report: TrendReport, alerts: list | None = None,
+                  hook_errors: list[str] | None = None) -> dict:
+    return {
+        "n_ref_rows": report.n_ref_rows,
+        "snapshots": [
+            {"label": lab, "n_rows": n}
+            for lab, n in zip(report.labels, report.snapshot_rows)
+        ],
+        "n_drifted_latest": report.n_drifted_latest,
+        "n_watch_latest": report.n_watch_latest,
+        "alerts": [a.to_dict() for a in (alerts or [])],
+        "hook_errors": list(hook_errors or []),
+        "features": [
+            {
+                "name": f.name, "kind": f.kind,
+                "psi": [p.psi for p in f.points],
+                "verdicts": [p.verdict for p in f.points],
+                "direction": f.direction,
+                "latest_verdict": f.latest_verdict,
+            }
+            for f in report.features
+        ],
+    }
+
+
+def render_trend_json(report: TrendReport, alerts: list | None = None,
+                      hook_errors: list[str] | None = None) -> str:
+    return json.dumps(trend_to_dict(report, alerts=alerts,
+                                    hook_errors=hook_errors),
+                      indent=2, default=str)
+
+
+def _trend_feature_card(f, n_snaps: int) -> str:
+    name = html.escape(f.name)
+    dirn = f.direction
+    arrow = _DIRECTION_ARROW[dirn]
+    rows = []
+    for point in f.points:
+        if point.psi is None:
+            bar, pct, verdict_class, verdict = "", "—", "", "n/a"
+        else:
+            color = ("#ef4444" if point.verdict == "significant drift"
+                     else "#f59e0b" if point.verdict.startswith("moderate")
+                     else "#22c55e")
+            bar = _bar(point.psi / HTML_PSI_SCALE, color)
+            pct = f"{point.psi:.3f}"
+            verdict_class = ("drift" if point.verdict == "significant drift"
+                             else "watch" if point.verdict.startswith("moderate")
+                             else "ok")
+            verdict = (f"<span class='verdict {verdict_class}'>"
+                       f"{html.escape(point.verdict)}</span>")
+        rows.append(f"<tr><td>{bar}</td><td class='pct'>{pct}</td><td>{verdict}</td></tr>")
+    latest_class = ("drift" if f.latest_verdict == "significant drift"
+                    else "watch" if f.latest_verdict.startswith("moderate")
+                    else "ok")
+    return (
+        f"<section class='card'>"
+        f"<h3>{name} <span class='kind'>{f.kind}</span> "
+        f"<span class='trend-arrow'>{arrow}</span> {dirn} · "
+        f"<span class='verdict {latest_class}'>{html.escape(f.latest_verdict)}</span></h3>"
+        "<table><tr><th>PSI vs reference</th><th>score</th><th>verdict</th></tr>"
+        + "".join(rows) + "</table></section>"
+    )
+
+
+def render_trend_html(report: TrendReport) -> str:
+    snap_labels = " → ".join(html.escape(l) for l in report.labels)
+    cards = "\n".join(_trend_feature_card(f, len(report.labels))
+                      for f in report.features)
+    snap_rows = " → ".join(
+        f"{html.escape(l)} ({n})" for l, n in
+        zip(report.labels, report.snapshot_rows))
+    return f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>driftwatch trend report</title>
+<style>
+body {{ font-family: -apple-system, system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; color: #1f2937; }}
+h1 {{ font-size: 1.5rem; }} .summary {{ color: #4b5563; }}
+.card {{ border: 1px solid #e5e7eb; border-radius: 8px; padding: 1rem 1.25rem; margin: 1.25rem 0; }}
+.card h3 {{ margin: 0 0 .25rem; font-size: 1.05rem; }}
+.kind {{ font-size: .75rem; color: #6b7280; font-weight: normal; }}
+.trend-arrow {{ font-size: 1rem; }}
+.verdict {{ font-size: .75rem; padding: .15rem .5rem; border-radius: 999px; }}
+.verdict.ok {{ background: #dcfce7; color: #166534; }}
+.verdict.watch {{ background: #fef9c3; color: #854d0e; }}
+.verdict.drift {{ background: #fee2e2; color: #991b1b; }}
+table {{ width: 100%; border-collapse: collapse; font-size: .85rem; }}
+th {{ text-align: left; color: #6b7280; font-weight: 600; padding: .25rem .5rem; }}
+td {{ padding: .25rem .5rem; border-top: 1px solid #f3f4f6; vertical-align: middle; }}
+.bar-track {{ display: inline-block; width: 55%; background: #f3f4f6; border-radius: 4px; vertical-align: middle; }}
+.bar {{ height: 12px; border-radius: 4px; }}
+.pct {{ margin-left: .5rem; color: #4b5563; }}
+</style></head><body>
+<h1>driftwatch trend report</h1>
+<p class="summary">{report.n_ref_rows} reference rows · snapshots: {snap_rows}<br>
+{len(report.features)} features tracked ·
+<strong>{report.n_drifted_latest}</strong> with significant drift (latest) ·
+<strong>{report.n_watch_latest}</strong> to watch (latest)</p>
+<p class="summary">Bars show PSI against the reference, scaled to PSI = {HTML_PSI_SCALE} ·
+thresholds: 0.1 (watch), 0.25 (significant drift)</p>
+{cards}
+</body></html>
+"""
 
 
 def _bar(pct: float, color: str) -> str:
