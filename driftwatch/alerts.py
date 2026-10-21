@@ -17,18 +17,26 @@ Hook specs (``--alert-hook``, repeatable):
 
 - ``print`` — print each alert to stdout.
 - ``file:PATH`` — append each alert as one JSON object per line (JSONL).
+- ``webhook:URL`` — POST all alerts as one JSON payload to the URL
+  (see ``notify.build_alert_payload``).
+- ``email:ADDRESS`` — send one email per alert via SMTP configured from
+  ``DRIFTWATCH_SMTP_*`` env vars (never stored on disk).
 
 A bad hook spec is rejected with a clear error (exit 1). A hook that fails
-at dispatch time (e.g. an unwritable file) is reported to stderr and does
-not crash the trend report.
+at dispatch time (e.g. an unwritable file, an unreachable webhook, missing
+SMTP config) is reported to stderr and does not crash the trend report.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
+import smtplib
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
+from . import notify as _notify
 from .trend import TrendReport
 
 #: Severity ranking of verdicts. "n/a" (missing snapshot) is never compared.
@@ -112,8 +120,11 @@ def detect_alerts(report: TrendReport) -> list[Alert]:
 
 @dataclass
 class AlertHook:
-    kind: str  # "print" | "file"
-    path: str | None = None
+    kind: str  # "print" | "file" | "webhook" | "email"
+    path: str | None = None  # file path, webhook URL, or email address
+
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 def parse_alert_hook(spec: str) -> AlertHook:
@@ -127,16 +138,36 @@ def parse_alert_hook(spec: str) -> AlertHook:
                 f"invalid --alert-hook spec {spec!r}: 'file:' needs a path, "
                 "e.g. --alert-hook file:alerts.jsonl")
         return AlertHook(kind="file", path=path)
+    if spec.startswith("webhook:"):
+        url = spec[len("webhook:"):]
+        if urlsplit(url).scheme.lower() not in ("http", "https"):
+            raise ValueError(
+                f"invalid --alert-hook spec {spec!r}: the webhook URL must "
+                "start with http:// or https://")
+        return AlertHook(kind="webhook", path=url)
+    if spec.startswith("email:"):
+        addr = spec[len("email:"):]
+        if not _EMAIL_RE.match(addr):
+            raise ValueError(
+                f"invalid --alert-hook spec {spec!r}: {addr!r} is not a "
+                "valid email address")
+        return AlertHook(kind="email", path=addr)
     raise ValueError(
-        f"invalid --alert-hook spec {spec!r}: expected 'print' or 'file:PATH'")
+        f"invalid --alert-hook spec {spec!r}: expected 'print', 'file:PATH', "
+        "'webhook:URL', or 'email:ADDRESS'")
 
 
-def dispatch_alerts(alerts: list[Alert], hooks: list[AlertHook]) -> list[str]:
+def dispatch_alerts(alerts: list[Alert], hooks: list[AlertHook],
+                    webhook_sender=None, email_sender=None) -> list[str]:
     """Deliver ``alerts`` to every hook; return one error string per failure.
 
     A failing hook never raises: the caller reports the errors and the
-    trend report still completes.
+    trend report still completes. ``webhook_sender``/``email_sender`` are
+    injectable callables ``(target, alerts) -> None`` for tests; by default
+    the real network senders from :mod:`driftwatch.notify` are used.
     """
+    webhook_sender = webhook_sender or _notify.deliver_webhook
+    email_sender = email_sender or _notify.send_email
     errors: list[str] = []
     for hook in hooks:
         try:
@@ -148,9 +179,15 @@ def dispatch_alerts(alerts: list[Alert], hooks: list[AlertHook]) -> list[str]:
                 with open(hook.path, "a", encoding="utf-8") as fh:
                     for alert in alerts:
                         fh.write(json.dumps(alert.to_dict()) + "\n")
+            elif hook.kind == "webhook":
+                assert hook.path is not None  # parse_alert_hook guarantees it
+                webhook_sender(hook.path, alerts)
+            elif hook.kind == "email":
+                assert hook.path is not None  # parse_alert_hook guarantees it
+                email_sender(hook.path, alerts)
             else:  # pragma: no cover - parse_alert_hook only builds known kinds
                 errors.append(f"unknown alert hook kind {hook.kind!r}")
-        except OSError as exc:
+        except (OSError, smtplib.SMTPException, _notify.NotifyError) as exc:
             errors.append(f"{hook.kind} hook failed: {exc}")
     return errors
 

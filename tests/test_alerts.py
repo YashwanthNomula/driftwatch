@@ -141,8 +141,8 @@ def test_parse_alert_hook_valid():
 
 
 def test_parse_alert_hook_rejects_bad_specs():
-    for bad in ("", "file:", "webhook:http://x", "PRINT", "print:extra",
-                "stdout", "file"):
+    for bad in ("", "file:", "webhook:ftp://x", "email:not-an-email",
+                "PRINT", "print:extra", "stdout", "file"):
         with pytest.raises(ValueError, match="invalid --alert-hook spec"):
             parse_alert_hook(bad)
 
@@ -291,7 +291,7 @@ def test_cli_trend_alert_hook_file_and_json(tmp_path, capsys):
 
 def test_cli_trend_bad_hook_spec_rejected(tmp_path, capsys):
     ref, snaps = _series(tmp_path)
-    code = main(["trend", ref, *snaps, "--alert-hook", "webhook:http://x"])
+    code = main(["trend", ref, *snaps, "--alert-hook", "webhook:not a url"])
     assert code == 1
     assert "invalid --alert-hook spec" in capsys.readouterr().err
 

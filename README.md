@@ -129,15 +129,24 @@ alerts: 1 new
 
 - Sinks (repeatable): `print` writes `driftwatch alert: ...` lines to stdout;
   `file:PATH` appends one JSON object per alert (JSONL) — same records that
-  land in the trend JSON's `alerts` array.
+  land in the trend JSON's `alerts` array; `webhook:URL` POSTs all alerts as
+  one JSON payload `{"source": "driftwatch", "alerts": [...]}` to the URL;
+  `email:ADDRESS` sends one email per alert via SMTP.
+- Email needs `DRIFTWATCH_SMTP_HOST` + `DRIFTWATCH_SMTP_FROM` in the
+  environment (plus `DRIFTWATCH_SMTP_USER` / `DRIFTWATCH_SMTP_PASS` if your
+  server needs auth, `DRIFTWATCH_SMTP_PORT` to override 587, and
+  `DRIFTWATCH_SMTP_SSL=1` for implicit TLS). Passwords are never written to
+  a config file — same pattern as sitepulse's notifiers.
 - `--alert-state PATH` remembers already-reported alerts (feature → verdict +
   snapshot label), so re-running the same snapshots suppresses duplicates;
   a fresh escalation on a new snapshot still fires.
 - Each alert record carries `feature`, `previous_verdict`, `new_verdict`,
   `psi`, `ks`, `direction`, `snapshot_index`, and `snapshot_label`.
-- Fail-closed: a bad hook spec (anything but `print` / `file:PATH`) is
+- Fail-closed: a bad hook spec (anything but `print` / `file:PATH` /
+  `webhook:URL` / `email:ADDRESS`) is
   rejected with a clear error and exit 1; a hook that fails at dispatch
-  (e.g. an unwritable file) is reported on stderr and in the JSON
+  (e.g. an unwritable file, an unreachable webhook, missing SMTP config) is
+  reported on stderr and in the JSON
   `hook_errors` array without crashing the report. Alerts never change the
   exit code — the gate still keys off the latest snapshot's drift.
 
@@ -181,7 +190,7 @@ Rules:
 ## Layout
 
 ```
-driftwatch/        # library: stats.py (PSI/KS), detect.py (comparison), trend.py (trend over time), alerts.py (alert hooks), report.py, cli.py, config.py (per-feature thresholds)
+driftwatch/        # library: stats.py (PSI/KS), detect.py (comparison), trend.py (trend over time), alerts.py (alert hooks), notify.py (webhook/email delivery), report.py, cli.py, config.py (per-feature thresholds)
 examples/          # make_examples.py + generated CSV pairs (drifted & stable)
 tests/             # 83 pytest tests
 ```

@@ -77,7 +77,8 @@ def build_trend_parser() -> argparse.ArgumentParser:
                    help="JSON config file with per-feature PSI/KS warning/drift thresholds")
     p.add_argument("--alert-hook", metavar="SPEC", action="append",
                    dest="alert_hooks", default=None,
-                   help="alert sink, repeatable: 'print' or 'file:PATH' "
+                   help="alert sink, repeatable: 'print', 'file:PATH', "
+                        "'webhook:URL', or 'email:ADDRESS' "
                         "(alerts fire on verdict escalations at the latest snapshot)")
     p.add_argument("--alert-state", metavar="PATH",
                    help="JSON state file remembering already-reported alerts, "
